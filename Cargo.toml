@@ -7,6 +7,7 @@ license = "MIT"
 keywords = ["kernel", "deterministic", "audit", "reality"]
 categories = ["development-tools", "simulation"]
 readme = "README.md"
+repository = "https://github.com/MxolisiMoyo/archimedes-kernel"
 
 [dependencies]
 sha2 = "0.10"
