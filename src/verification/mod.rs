@@ -1,0 +1,499 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::movement::{Event, HashValue, MovementComposition, MovementMemory};
+use crate::primitives::{Boundary, Identity, Law, Reality, State};
+
+fn write_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn write_str(hasher: &mut Sha256, s: &str) {
+    write_bytes(hasher, s.as_bytes());
+}
+
+fn write_string_vec(hasher: &mut Sha256, items: &[String]) {
+    hasher.update((items.len() as u64).to_le_bytes());
+    for item in items {
+        write_str(hasher, item);
+    }
+}
+
+fn write_transition_vec(hasher: &mut Sha256, items: &[(String, String)]) {
+    hasher.update((items.len() as u64).to_le_bytes());
+    for (from, to) in items {
+        write_str(hasher, from);
+        write_str(hasher, to);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inspection {
+    pub initial_state: State,
+    pub memory: MovementMemory,
+    pub current_state: State,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replay {
+    pub replayed_state: State,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Continuity {
+    pub preserved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriftCheck {
+    pub hidden_state_mutation_detected: bool,
+    pub hidden_boundary_growth_detected: bool,
+    pub hidden_law_growth_detected: bool,
+    pub permission_drift_detected: bool,
+    pub hidden_drift_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofResult {
+    pub reality_exists: bool,
+    pub identity_confirmed: bool,
+    pub active_boundary_confirmed: bool,
+    pub active_law_confirmed: bool,
+    pub state_confirmed: bool,
+    pub event_received: bool,
+    pub event_directly_mutated_state: bool,
+    pub law_check_performed: bool,
+    pub law_check_result: bool,
+    pub transition_recorded: bool,
+    pub transition_grounded_in_law_check: bool,
+    pub movement_memory_recorded: bool,
+    pub inspection_available: bool,
+    pub replay_result: bool,
+    pub continuity_result: bool,
+    pub hidden_state_mutation_detected: bool,
+    pub hidden_boundary_growth_detected: bool,
+    pub hidden_law_growth_detected: bool,
+    pub permission_drift_detected: bool,
+    pub hidden_drift_required: bool,
+    pub proof_status: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MovementError {
+    RealityMissing,
+    IdentityMissingOrUnstable,
+    BoundaryMissing,
+    LawMissing,
+    StateMissing,
+    StateOutsideBoundary,
+    EventMutatesStateDirectly,
+    LawCheckMissing,
+    TransitionBeforeLawCheck,
+    TransitionUnrecorded,
+    TransitionNotGroundedInLawCheck,
+    MovementMemoryMissing,
+    InspectionHidesProofPath,
+    ReplayChecksOnlyFinalState,
+    ContinuityAssertedWithoutReplay,
+    DriftCheckDetectedHiddenStateMutation,
+    DriftCheckDetectedHiddenBoundaryGrowth,
+    DriftCheckDetectedHiddenLawGrowth,
+    DriftCheckDetectedPermissionDrift,
+    ProofResultDeclaresPassWithoutEvidence,
+}
+
+impl std::fmt::Display for MovementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for MovementError {}
+
+pub fn detect_drift(
+    original_boundary: &Boundary,
+    original_law: &Law,
+    current_boundary: &Boundary,
+    current_law: &Law,
+    replay_result: bool,
+) -> DriftCheck {
+    let hidden_state_mutation_detected = !replay_result;
+    let hidden_boundary_growth_detected = original_boundary != current_boundary;
+    let hidden_law_growth_detected = original_law != current_law;
+    let permission_drift_detected = hidden_law_growth_detected;
+    let hidden_drift_required = hidden_state_mutation_detected
+        || hidden_boundary_growth_detected
+        || hidden_law_growth_detected
+        || permission_drift_detected;
+
+    DriftCheck {
+        hidden_state_mutation_detected,
+        hidden_boundary_growth_detected,
+        hidden_law_growth_detected,
+        permission_drift_detected,
+        hidden_drift_required,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationReport {
+    pub inspection: Inspection,
+    pub replay: Replay,
+    pub continuity: Continuity,
+    pub memory_integrity: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedSequence {
+    pub final_state: State,
+    pub transition_count: usize,
+    pub proofs: Vec<ProofResult>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealityFingerprint(pub [u8; 32]);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrityReport {
+    pub fingerprint: RealityFingerprint,
+    pub drift: DriftCheck,
+    pub memory_integrity: bool,
+    pub replay: Replay,
+    pub continuity: Continuity,
+    pub state: State,
+    pub transition_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimulationReport {
+    pub planned: PlannedSequence,
+    pub integrity: IntegrityReport,
+    pub composition: Option<MovementComposition>,
+    pub fingerprint: RealityFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealityDiff {
+    pub identity_same: bool,
+    pub boundary_same: bool,
+    pub law_same: bool,
+    pub state_same: bool,
+    pub initial_state_same: bool,
+    pub birth_boundary_same: bool,
+    pub birth_law_same: bool,
+    pub memory_hash_same: bool,
+    pub transition_count_same: bool,
+    pub fingerprint_same: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreflightReport {
+    pub results: Vec<bool>,
+    pub sequence_lawful: bool,
+    pub final_state: Option<State>,
+    pub transition_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealitySnapshot {
+    pub identity: Identity,
+    pub boundary: Boundary,
+    pub law: Law,
+    pub state: State,
+    pub initial_state: State,
+    pub birth_boundary: Boundary,
+    pub birth_law: Law,
+    pub memory_hash: HashValue,
+    pub transition_count: usize,
+    pub fingerprint: RealityFingerprint,
+    pub integrity: IntegrityReport,
+}
+
+impl RealitySnapshot {
+    pub fn matches_current(&self, reality: &Reality) -> bool {
+        let diff = self.diff_against(reality);
+        diff.identity_same
+            && diff.boundary_same
+            && diff.law_same
+            && diff.state_same
+            && diff.initial_state_same
+            && diff.birth_boundary_same
+            && diff.birth_law_same
+            && diff.memory_hash_same
+            && diff.transition_count_same
+            && diff.fingerprint_same
+    }
+
+    pub fn diff_against(&self, reality: &Reality) -> RealityDiff {
+        RealityDiff {
+            identity_same: self.identity == reality.identity,
+            boundary_same: self.boundary == reality.boundary,
+            law_same: self.law == reality.law,
+            state_same: self.state == reality.state,
+            initial_state_same: self.initial_state == reality.initial_state,
+            birth_boundary_same: self.birth_boundary == reality.birth_boundary,
+            birth_law_same: self.birth_law == reality.birth_law,
+            memory_hash_same: self.memory_hash == reality.memory.current_hash(),
+            transition_count_same: self.transition_count == reality.memory.transitions.len(),
+            fingerprint_same: self.fingerprint == reality.fingerprint(),
+        }
+    }
+}
+
+impl Reality {
+    pub fn inspect(&self) -> Inspection {
+        Inspection {
+            initial_state: self.initial_state.clone(),
+            memory: self.memory.clone(),
+            current_state: self.state.clone(),
+        }
+    }
+    pub fn replay(&self) -> Replay {
+        if !self.memory.verify_integrity() {
+            return Replay {
+                replayed_state: self.initial_state.clone(),
+                passed: false,
+            };
+        }
+        let mut replayed_state = self.initial_state.clone();
+        for t in &self.memory.transitions {
+            if !t.law_check_valid {
+                return Replay {
+                    replayed_state,
+                    passed: false,
+                };
+            }
+            replayed_state = t.after.clone();
+        }
+        let passed = replayed_state == self.state;
+        Replay {
+            replayed_state,
+            passed,
+        }
+    }
+    pub fn continuity(&self) -> Continuity {
+        Continuity {
+            preserved: self.replay().passed,
+        }
+    }
+    pub fn memory_integrity(&self) -> bool {
+        self.memory.verify_integrity()
+    }
+    pub fn verify(&self) -> VerificationReport {
+        VerificationReport {
+            inspection: self.inspect(),
+            replay: self.replay(),
+            continuity: self.continuity(),
+            memory_integrity: self.memory_integrity(),
+        }
+    }
+    pub fn drift_check(&self) -> DriftCheck {
+        detect_drift(
+            &self.birth_boundary,
+            &self.birth_law,
+            &self.boundary,
+            &self.law,
+            self.replay().passed,
+        )
+    }
+    pub fn fingerprint(&self) -> RealityFingerprint {
+        let mut hasher = Sha256::new();
+        write_str(&mut hasher, &self.identity.0);
+        write_string_vec(&mut hasher, &self.birth_boundary.allowed_values);
+        write_transition_vec(&mut hasher, &self.birth_law.allowed_transitions);
+        write_str(&mut hasher, &self.state.field);
+        write_str(&mut hasher, &self.initial_state.field);
+        hasher.update(self.memory.current_hash().0);
+
+        let result = hasher.finalize();
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&result);
+        RealityFingerprint(bytes)
+    }
+    pub fn integrity_report(&self) -> IntegrityReport {
+        IntegrityReport {
+            fingerprint: self.fingerprint(),
+            drift: self.drift_check(),
+            memory_integrity: self.memory_integrity(),
+            replay: self.replay(),
+            continuity: self.continuity(),
+            state: self.state().clone(),
+            transition_count: self.memory().transitions.len(),
+        }
+    }
+    pub fn would_accept(&self, event: &Event) -> bool {
+        if event.proposed_field.is_empty() {
+            return false;
+        }
+        if !self.boundary.allowed_values.contains(&self.state.field) {
+            return false;
+        }
+        self.law.check(&self.state, event)
+    }
+    pub fn diff(&self, other: &Reality) -> RealityDiff {
+        RealityDiff {
+            identity_same: self.identity == other.identity,
+            boundary_same: self.boundary == other.boundary,
+            law_same: self.law == other.law,
+            state_same: self.state == other.state,
+            initial_state_same: self.initial_state == other.initial_state,
+            birth_boundary_same: self.birth_boundary == other.birth_boundary,
+            birth_law_same: self.birth_law == other.birth_law,
+            memory_hash_same: self.memory.current_hash() == other.memory.current_hash(),
+            transition_count_same: self.memory.transitions.len() == other.memory.transitions.len(),
+            fingerprint_same: self.fingerprint() == other.fingerprint(),
+        }
+    }
+    pub fn preflight_sequence(&self, events: &[Event]) -> PreflightReport {
+        let mut clone = self.clone();
+        let mut results = Vec::with_capacity(events.len());
+        let mut accepted = 0usize;
+
+        for event in events {
+            if clone.would_accept(event) {
+                results.push(true);
+                let _ = crate::perform_movement(&mut clone, event.clone());
+                accepted += 1;
+            } else {
+                results.push(false);
+                return PreflightReport {
+                    results,
+                    sequence_lawful: false,
+                    final_state: None,
+                    transition_count: accepted,
+                };
+            }
+        }
+
+        PreflightReport {
+            results,
+            sequence_lawful: true,
+            final_state: Some(clone.state().clone()),
+            transition_count: accepted,
+        }
+    }
+    pub fn snapshot(&self) -> RealitySnapshot {
+        RealitySnapshot {
+            identity: self.identity.clone(),
+            boundary: self.boundary.clone(),
+            law: self.law.clone(),
+            state: self.state.clone(),
+            initial_state: self.initial_state.clone(),
+            birth_boundary: self.birth_boundary.clone(),
+            birth_law: self.birth_law.clone(),
+            memory_hash: self.memory.current_hash(),
+            transition_count: self.memory.transitions.len(),
+            fingerprint: self.fingerprint(),
+            integrity: self.integrity_report(),
+        }
+    }
+}
+
+pub fn plan_sequence(
+    reality: &Reality,
+    events: Vec<Event>,
+) -> Result<PlannedSequence, MovementError> {
+    let mut clone = reality.clone();
+    let proofs = crate::perform_movement_sequence(&mut clone, events)?;
+    Ok(PlannedSequence {
+        final_state: clone.state().clone(),
+        transition_count: clone.memory().transitions.len(),
+        proofs,
+    })
+}
+
+pub fn simulate_sequence(
+    reality: &Reality,
+    events: Vec<Event>,
+) -> Result<SimulationReport, MovementError> {
+    let mut clone = reality.clone();
+    let proofs = crate::perform_movement_sequence(&mut clone, events)?;
+
+    let planned = PlannedSequence {
+        final_state: clone.state().clone(),
+        transition_count: clone.memory().transitions.len(),
+        proofs,
+    };
+    let integrity = clone.integrity_report();
+    let composition = if !clone.memory().transitions.is_empty() {
+        clone
+            .memory()
+            .compose(0, clone.memory().transitions.len() - 1)
+    } else {
+        None
+    };
+    let fingerprint = clone.fingerprint();
+
+    Ok(SimulationReport {
+        planned,
+        integrity,
+        composition,
+        fingerprint,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_drift_no_change() {
+        let boundary = Boundary {
+            allowed_values: vec!["a".into(), "b".into()],
+        };
+        let law = Law {
+            allowed_transitions: vec![("a".to_string(), "b".to_string())],
+        };
+        let drift = detect_drift(&boundary, &law, &boundary, &law, true);
+        assert!(!drift.hidden_drift_required);
+    }
+
+    #[test]
+    fn detect_drift_boundary_change() {
+        let b1 = Boundary {
+            allowed_values: vec!["a".into(), "b".into()],
+        };
+        let b2 = Boundary {
+            allowed_values: vec!["a".into(), "b".into(), "c".into()],
+        };
+        let law = Law {
+            allowed_transitions: vec![("a".to_string(), "b".to_string())],
+        };
+        let drift = detect_drift(&b1, &law, &b2, &law, true);
+        assert!(drift.hidden_boundary_growth_detected);
+        assert!(drift.hidden_drift_required);
+    }
+
+    #[test]
+    fn detect_drift_law_change() {
+        let boundary = Boundary {
+            allowed_values: vec!["a".into(), "b".into()],
+        };
+        let law1 = Law {
+            allowed_transitions: vec![("a".to_string(), "b".to_string())],
+        };
+        let law2 = Law {
+            allowed_transitions: vec![
+                ("a".to_string(), "b".to_string()),
+                ("b".to_string(), "c".to_string()),
+            ],
+        };
+        let drift = detect_drift(&boundary, &law1, &boundary, &law2, true);
+        assert!(drift.hidden_law_growth_detected);
+        assert!(drift.permission_drift_detected);
+    }
+
+    #[test]
+    fn detect_drift_state_mutation() {
+        let boundary = Boundary {
+            allowed_values: vec!["a".into(), "b".into()],
+        };
+        let law = Law {
+            allowed_transitions: vec![("a".to_string(), "b".to_string())],
+        };
+        let drift = detect_drift(&boundary, &law, &boundary, &law, false);
+        assert!(drift.hidden_state_mutation_detected);
+    }
+}
