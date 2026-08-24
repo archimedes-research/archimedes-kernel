@@ -1,34 +1,44 @@
 # Archimedes Kernel Public API
 
-This document gives external developers a compact entry point for using `archimedes-kernel`.
+This document describes the public API of `archimedes-kernel` v2.
 
-## 1. What this crate provides
+## 1. Scope
 
-`archimedes-kernel` is a minimal Rust library for constructing lawful, replayable, drift-resistant digital realities.
+`archimedes-kernel` is a narrow Rust library for constructing and verifying deterministic state-transition systems.
 
-It enforces:
+It provides:
 
 - explicit identity, boundary, law, and state;
-- lawful movement only;
-- cryptographic movement memory;
-- drift detection from birth state;
-- read-only verification, snapshot, and diff;
-- deterministic persistence;
-- optional authenticated persistence using Ed25519.
+- lawful movement;
+- SHA-256 hash-chained movement memory;
+- replay and continuity verification;
+- drift detection;
+- snapshots, diffs, planning, preflight, and simulation;
+- versioned binary persistence;
+- optional Ed25519-authenticated persistence.
 
-The kernel is intentionally narrow. It does not include database, networking, UI, or domain-specific behavior.
+It does not provide networking, database storage, UI, external identity verification, or production key management.
 
-## 2. Adding the dependency
+## 2. Dependency
 
-In `Cargo.toml`:
+After v2.0.0 is published to crates.io:
 
 ```toml
 [dependencies]
+archimedes-kernel = "2.0.0"
+
+Local checkout:
+
+[dependencies]
 archimedes-kernel = { path = "." }
+
+Applications using the signing examples directly also need compatible ed25519-dalek and rand dependencies.
 
 ## 3. Creating a Reality
 
-use archimedes_kernel::primitives::{Boundary, Identity, Law, Reality, State};
+use archimedes_kernel::primitives::{
+    Boundary, Identity, Law, Reality, State,
+};
 
 let reality = Reality::new(
     Identity("example-reality".to_string()),
@@ -45,34 +55,57 @@ let reality = Reality::new(
             ("ready".to_string(), "done".to_string()),
         ],
     },
-    State { field: "idle".to_string() },
+    State {
+        field: "idle".to_string(),
+    },
 );
 
-## 4. Performing lawful movement
+The identity, boundary, law, state, birth configuration, and movement memory are held internally by Reality.
 
-use archimedes_kernel::{movement::Event, perform_movement};
+## 4. Performing movement
 
-let mut reality = /* create as above */;
-let event = Event { proposed_field: "ready".to_string() };
+use archimedes_kernel::{
+    movement::Event,
+    perform_movement,
+};
+
+let event = Event {
+    proposed_field: "ready".to_string(),
+};
+
 let proof = perform_movement(&mut reality, event)?;
+
 assert!(proof.proof_status);
 
-Unlawful events are rejected and return an error.
+An event does not mutate state directly.
+
+The kernel first evaluates the requested transition against the active Law. A rejected movement returns MovementError.
 
 ## 5. Sequential movement
 
-use archimedes_kernel::{movement::Event, perform_movement_sequence};
+use archimedes_kernel::{
+    movement::Event,
+    perform_movement_sequence,
+};
 
 let events = vec![
-    Event { proposed_field: "ready".to_string() },
-    Event { proposed_field: "done".to_string() },
+    Event {
+        proposed_field: "ready".to_string(),
+    },
+    Event {
+        proposed_field: "done".to_string(),
+    },
 ];
 
-let proofs = perform_movement_sequence(&mut reality, events)?;
+let proofs =
+    perform_movement_sequence(&mut reality, events)?;
+
+Execution stops at the first rejected movement.
 
 ## 6. Read-only verification
 
 let report = reality.verify();
+
 assert!(report.replay.passed);
 assert!(report.continuity.preserved);
 assert!(report.memory_integrity);
@@ -85,58 +118,227 @@ let fingerprint = reality.fingerprint();
 let snapshot = reality.snapshot();
 assert!(snapshot.matches_current(&reality));
 
-## 7. Persistence
+memory_integrity() verifies the SHA-256 movement hash chain.
 
-Unsigned:
+replay() reconstructs state from movement history.
+
+continuity() reports whether replay reaches the current state.
+
+drift_check() separately detects changes to active boundary and law and replay-visible state drift.
+
+A RealityFingerprint is not a replacement for drift_check(). The fingerprint and drift report represent different integrity observations.
+
+## 7. Planning and simulation
+
+A sequence can be checked without mutating the original reality:
+
+let report = reality.preflight_sequence(&events);
+
+A full planned sequence can be produced with:
+
+let planned = archimedes_kernel::plan_sequence(
+    &reality,
+    events.clone(),
+)?;
+
+Simulation produces a planned result, integrity report, optional movement composition, and fingerprint:
+
+let simulation =
+    archimedes_kernel::simulate_sequence(&reality, events)?;
+
+## 8. Unsigned persistence
+
+Version 2 uses Postcard.
 
 use std::path::Path;
-use archimedes_kernel::{save_reality, load_reality};
+use archimedes_kernel::{
+    load_reality,
+    save_reality,
+};
 
 let path = Path::new("reality.bin");
+
 save_reality(&reality, path)?;
+
 let loaded = load_reality(path)?;
+
 assert_eq!(reality, loaded);
 
-Signed:
+Unsigned load_reality() checks movement-memory integrity and drift after decoding.
 
-use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
-use archimedes_kernel::{sign_reality, save_signed_reality, load_signed_reality};
+Unsigned persistence does not provide authenticity against an adversary capable of creating a new internally consistent artifact.
 
-let mut csprng = OsRng;
-let signing_key = SigningKey::generate(&mut csprng);
-let public_key = signing_key.verifying_key().to_bytes();
+Snapshots can also be stored and loaded with:
 
-let signed = sign_reality(&reality, &signing_key)?;
-save_signed_reality(&signed, Path::new("signed-reality.bin"))?;
+save_snapshot
+load_snapshot
 
-let loaded_signed = load_signed_reality(Path::new("signed-reality.bin"), &public_key)?;
-assert_eq!(loaded_signed.reality, reality);
-
-## 8. Important guarantees
-#![forbid(unsafe_code)] is set in the crate.
-
-All movement goes through the lawful movement functions.
-
-Reality fields are private to the crate; external mutation is impossible.
-
-Movement memory uses SHA‑256.
+## 9. Signed persistence
 
 Signed persistence uses Ed25519.
 
-## 9. Limitations
-This crate is a minimum kernel, not a production application. It does not yet include:
+A v2 signed reality binds:
 
-multi-reality orchestration;
+ARCHIMEDES-KERNEL-SIGNED-REALITY-V2
++ protocol version
++ Reality
++ embedded authority public key
 
-networking;
+A signed snapshot uses a separate domain:
 
-database;
+ARCHIMEDES-KERNEL-SIGNED-SNAPSHOT-V2
 
-UI;
+Example:
 
-key management or rotation;
+use std::path::Path;
 
-schema migration.
+use archimedes_kernel::{
+    load_signed_reality,
+    save_signed_reality,
+    sign_reality,
+};
 
-Use it as a substrate, not as an end-user product.
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
+
+let mut csprng = OsRng;
+let signing_key = SigningKey::generate(&mut csprng);
+
+let expected_public_key =
+    signing_key.verifying_key().to_bytes();
+
+let signed =
+    sign_reality(&reality, &signing_key)?;
+
+save_signed_reality(
+    &signed,
+    Path::new("signed-reality.bin"),
+)?;
+
+let loaded = load_signed_reality(
+    Path::new("signed-reality.bin"),
+    &expected_public_key,
+)?;
+
+assert_eq!(loaded.reality, reality);
+assert_eq!(
+    loaded.public_key,
+    expected_public_key
+);
+
+use std::path::Path;
+
+use archimedes_kernel::{
+    load_signed_reality,
+    save_signed_reality,
+    sign_reality,
+};
+
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
+
+let mut csprng = OsRng;
+let signing_key = SigningKey::generate(&mut csprng);
+
+let expected_public_key =
+    signing_key.verifying_key().to_bytes();
+
+let signed =
+    sign_reality(&reality, &signing_key)?;
+
+save_signed_reality(
+    &signed,
+    Path::new("signed-reality.bin"),
+)?;
+
+let loaded = load_signed_reality(
+    Path::new("signed-reality.bin"),
+    &expected_public_key,
+)?;
+
+assert_eq!(loaded.reality, reality);
+assert_eq!(
+    loaded.public_key,
+    expected_public_key
+);
+
+Verification rejects:
+
+unsupported protocol versions
+wrong trusted public keys
+modified embedded public keys
+modified signed payloads
+invalid signatures
+invalid movement memory
+hidden drift
+
+The expected public key must come from a trusted channel.
+
+## 10. Persistence compatibility
+
+Version 2 is not byte-compatible with the v1 bincode persistence format.
+
+The crate does not automatically migrate v1 files.
+
+The public constant:
+
+PERSISTENCE_VERSION
+
+currently has the value:
+
+2
+
+## 11. Security boundary
+
+The kernel provides integrity mechanisms. It does not establish that caller-supplied identities, boundaries, or laws are correct in the external world.
+
+A valid signature means the serialized v2 payload verifies against the supplied trusted Ed25519 public key.
+
+It does not establish:
+
+signer intent
+signing-key custody
+external identity authenticity
+host integrity
+freshness
+revocation status
+rollback resistance
+
+See THREAT_MODEL.md.
+
+## 12. Unsafe code
+
+The crate root declares:
+
+#![forbid(unsafe_code)]
+
+## 13. Error model
+
+Movement failures return MovementError.
+
+Persistence failures return PersistenceError.
+
+Persistence errors include:
+
+IO failures
+serialization failures
+integrity failures
+signature failures
+unsupported persistence versions
+embedded/trusted public-key mismatch
+
+## 14. Current limitations
+
+The crate does not currently provide:
+
+multi-reality orchestration
+networking
+database integration
+UI
+key rotation
+key revocation
+replay prevention
+rollback prevention
+cross-version persistence migration
+
+Use it as infrastructure, not as an end-user security product.

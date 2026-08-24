@@ -11,7 +11,7 @@ pub use movement::{Event, LawCheck, MovementMemory, Transition};
 pub use persistence::{
     load_reality, load_signed_reality, load_signed_snapshot, load_snapshot, save_reality,
     save_signed_reality, save_signed_snapshot, save_snapshot, sign_reality, sign_snapshot,
-    PersistenceError, SignedReality, SignedSnapshot,
+    PersistenceError, SignedReality, SignedSnapshot, PERSISTENCE_VERSION,
 };
 pub use primitives::{Boundary, Identity, Law, Reality, State};
 pub use verification::{
