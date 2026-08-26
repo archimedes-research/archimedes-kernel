@@ -1,0 +1,28 @@
+name: Documentation Grammar
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  structural-gate:
+    name: Structural gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Run gate tests
+        run: python3 -m unittest discover -s tests -p 'test_markdown_grammar.py'
+
+      - name: Run structural gate
+        run: python3 scripts/check_markdown_grammar.py
