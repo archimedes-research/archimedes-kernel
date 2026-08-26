@@ -27,45 +27,51 @@ Reality
 → Continuity
 → DriftCheck
 → ProofResult
+```
 
 A movement succeeds only when the requested state transition is permitted by the active law.
 
 The kernel also provides:
 
-SHA-256 hash-chained movement memory;
-replay-based continuity verification;
-detection of state, boundary, law, and permission drift;
-snapshots, fingerprints, diffs, preflight checks, and simulations;
-versioned binary persistence;
-optional Ed25519-authenticated persistence.
+- SHA-256 hash-chained movement memory;
+- replay-based continuity verification;
+- detection of state, boundary, law, and permission drift;
+- snapshots, fingerprints, diffs, preflight checks, and simulations;
+- versioned binary persistence;
+- optional Ed25519-authenticated persistence.
 
 ## What the kernel does not establish
 
 The kernel does not prove that:
 
-an identity string corresponds to a real external actor;
-a boundary or law is semantically correct;
-the signer is trustworthy;
-a private signing key is uncompromised;
-a host running the kernel is uncompromised;
-a previously valid signed artifact is fresh rather than replayed or rolled back.
+- an identity string corresponds to a real external actor;
+- a boundary or law is semantically correct;
+- the signer is trustworthy;
+- a private signing key is uncompromised;
+- a host running the kernel is uncompromised;
+- a previously valid signed artifact is fresh rather than replayed or rolled back.
 
-See THREAT_MODEL.md for the complete boundary.
+See `THREAT_MODEL.md` for the complete boundary.
 
 ## Quickstart
 
 After v2.0.0 is published to crates.io:
 
+```toml
 [dependencies]
 archimedes-kernel = "2.0.0"
+```
 
 For a local source checkout:
 
+```toml
 [dependencies]
 archimedes-kernel = { path = "." }
+```
 
 Create a reality and perform lawful movement:
 
+```rust
 use archimedes_kernel::{
     movement::Event,
     perform_movement_sequence,
@@ -106,19 +112,25 @@ let proofs =
 
 assert!(proofs.iter().all(|proof| proof.proof_status));
 assert_eq!(reality.state().field, "done");
+```
 
 Run the test suite:
 
+```bash
 cargo test
+```
 
 Run the complete example:
 
+```bash
 cargo run --example demo
+```
 
 ## Verification
 
 Read-only verification is available directly from a Reality:
 
+```rust
 let report = reality.verify();
 
 assert!(report.memory_integrity);
@@ -127,6 +139,7 @@ assert!(report.continuity.preserved);
 
 let drift = reality.drift_check();
 assert!(!drift.hidden_drift_required);
+```
 
 Movement memory is hash-chained with SHA-256.
 
@@ -144,10 +157,12 @@ It does not provide cryptographic authenticity against an attacker capable of re
 
 Signed persistence uses Ed25519 and binds:
 
+```text
 domain separator
 + protocol version
 + persisted payload
 + authority public key
+```
 
 Signed reality and signed snapshot records use separate domain separators.
 
@@ -163,10 +178,13 @@ Applications that need to preserve v1 persisted data should perform any required
 
 PERSISTENCE_VERSION is exported by the crate and is currently:
 
+```text
 2
+```
 
 ## Module structure
 
+```text
 src/
 ├── primitives/    Reality, Identity, Boundary, Law, State
 ├── movement/      Event, LawCheck, Transition, MovementMemory,
@@ -177,12 +195,15 @@ src/
 │                  IntegrityReport, PreflightReport,
 │                  RealitySnapshot, RealityDiff
 └── persistence/   unsigned and authenticated versioned persistence
+```
 
 ## Security properties
 
 The crate contains:
 
+```rust
 #![forbid(unsafe_code)]
+```
 
 External callers are not given direct mutable access to the internal fields of Reality.
 
@@ -190,10 +211,10 @@ Cryptographic authenticity is provided only by the signed persistence API and on
 
 See:
 
-THREAT_MODEL.md
-SECURITY.md
-docs/public-api.md
-docs/release-notes-v2.0.0.md
+- `THREAT_MODEL.md`
+- `SECURITY.md`
+- `docs/public-api.md`
+- `docs/release-notes-v2.0.0.md`
 
 ## Historical evidence
 
@@ -203,8 +224,8 @@ These documents describe the implementation as it existed at those historical po
 
 Notable historical records include:
 
-docs/certified-truth-record-minimum-kernel-footing-v1.0-rc1.md
-docs/hostile-audit-report-v0.12.md
+- `docs/certified-truth-record-minimum-kernel-footing-v1.0-rc1.md`
+- `docs/hostile-audit-report-v0.12.md`
 
 ## Current limitations
 

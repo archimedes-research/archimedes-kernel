@@ -14,10 +14,13 @@ v1:
 
 ```text
 bincode
+```
 
 v2:
 
+```text
 Postcard 1.1.3
+```
 
 Version 2 persistence files are not byte-compatible with v1 files.
 
@@ -31,10 +34,12 @@ The embedded public_key field was not part of those signed bytes.
 
 Version 2 signs an explicit envelope containing:
 
+```text
 domain separator
 protocol version
 payload
 authority public key
+```
 
 The embedded authority public key is therefore cryptographically bound to the signature.
 
@@ -42,21 +47,29 @@ The embedded authority public key is therefore cryptographically bound to the si
 
 Signed realities use:
 
+```text
 ARCHIMEDES-KERNEL-SIGNED-REALITY-V2
+```
 
 Signed snapshots use:
 
+```text
 ARCHIMEDES-KERNEL-SIGNED-SNAPSHOT-V2
+```
 
 ### Explicit protocol version
 
 The public constant:
 
+```text
 PERSISTENCE_VERSION
+```
 
 has value:
 
+```text
 2
+```
 
 Unsigned persisted realities and snapshots carry a persistence version.
 
@@ -68,7 +81,9 @@ Unsupported versions are rejected.
 
 Signed loading now requires:
 
+```text
 embedded public key == externally trusted expected public key
+```
 
 A mismatch is rejected before the artifact is accepted.
 
@@ -76,14 +91,18 @@ A mismatch is rejected before the artifact is accepted.
 
 bincode 1.3.3 was removed after RustSec advisory:
 
+```text
 RUSTSEC-2025-0141
 Bincode is unmaintained
+```
 
 The v2 persistence implementation uses:
 
+```text
 postcard 1.1.3
 default-features = false
 features = ["alloc"]
+```
 
 The final v2 dependency audit reported no advisory.
 
@@ -91,26 +110,30 @@ The final v2 dependency audit reported no advisory.
 
 The v2 hardening gate passed:
 
+```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo build --release
 cargo audit
 cargo run --example demo
+```
 
 Test result:
 
+```text
 61 passed
 0 failed
+```
 
 New persistence tests include rejection of:
 
-tampered signed reality payload
-tampered signed snapshot payload
-tampered embedded authority key
-wrong expected authority key
-unsupported signed protocol version
-unsupported unsigned persistence version
+- tampered signed reality payload
+- tampered signed snapshot payload
+- tampered embedded authority key
+- wrong expected authority key
+- unsupported signed protocol version
+- unsupported unsigned persistence version
 
 Round-trip tests cover unsigned and signed realities and snapshots.
 
@@ -124,17 +147,17 @@ The core SHA-256 movement-memory design remains separate from the v2 persistence
 
 Version 2 does not add:
 
-key rotation
-key revocation
-multi-signature support
-freshness proofs
-replay prevention
-rollback prevention
-confidentiality
-external identity authentication
-host attestation
+- key rotation
+- key revocation
+- multi-signature support
+- freshness proofs
+- replay prevention
+- rollback prevention
+- confidentiality
+- external identity authentication
+- host attestation
 
-See THREAT_MODEL.md.
+See `THREAT_MODEL.md`.
 
 ## Migration
 

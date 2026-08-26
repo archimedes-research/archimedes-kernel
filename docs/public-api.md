@@ -26,16 +26,20 @@ After v2.0.0 is published to crates.io:
 ```toml
 [dependencies]
 archimedes-kernel = "2.0.0"
+```
 
 Local checkout:
 
+```toml
 [dependencies]
 archimedes-kernel = { path = "." }
+```
 
 Applications using the signing examples directly also need compatible ed25519-dalek and rand dependencies.
 
 ## 3. Creating a Reality
 
+```rust
 use archimedes_kernel::primitives::{
     Boundary, Identity, Law, Reality, State,
 };
@@ -59,11 +63,13 @@ let reality = Reality::new(
         field: "idle".to_string(),
     },
 );
+```
 
 The identity, boundary, law, state, birth configuration, and movement memory are held internally by Reality.
 
 ## 4. Performing movement
 
+```rust
 use archimedes_kernel::{
     movement::Event,
     perform_movement,
@@ -76,6 +82,7 @@ let event = Event {
 let proof = perform_movement(&mut reality, event)?;
 
 assert!(proof.proof_status);
+```
 
 An event does not mutate state directly.
 
@@ -83,6 +90,7 @@ The kernel first evaluates the requested transition against the active Law. A re
 
 ## 5. Sequential movement
 
+```rust
 use archimedes_kernel::{
     movement::Event,
     perform_movement_sequence,
@@ -99,11 +107,13 @@ let events = vec![
 
 let proofs =
     perform_movement_sequence(&mut reality, events)?;
+```
 
 Execution stops at the first rejected movement.
 
 ## 6. Read-only verification
 
+```rust
 let report = reality.verify();
 
 assert!(report.replay.passed);
@@ -117,6 +127,7 @@ let fingerprint = reality.fingerprint();
 
 let snapshot = reality.snapshot();
 assert!(snapshot.matches_current(&reality));
+```
 
 memory_integrity() verifies the SHA-256 movement hash chain.
 
@@ -132,24 +143,31 @@ A RealityFingerprint is not a replacement for drift_check(). The fingerprint and
 
 A sequence can be checked without mutating the original reality:
 
+```rust
 let report = reality.preflight_sequence(&events);
+```
 
 A full planned sequence can be produced with:
 
+```rust
 let planned = archimedes_kernel::plan_sequence(
     &reality,
     events.clone(),
 )?;
+```
 
 Simulation produces a planned result, integrity report, optional movement composition, and fingerprint:
 
+```rust
 let simulation =
     archimedes_kernel::simulate_sequence(&reality, events)?;
+```
 
 ## 8. Unsigned persistence
 
 Version 2 uses Postcard.
 
+```rust
 use std::path::Path;
 use archimedes_kernel::{
     load_reality,
@@ -163,6 +181,7 @@ save_reality(&reality, path)?;
 let loaded = load_reality(path)?;
 
 assert_eq!(reality, loaded);
+```
 
 Unsigned load_reality() checks movement-memory integrity and drift after decoding.
 
@@ -170,8 +189,10 @@ Unsigned persistence does not provide authenticity against an adversary capable 
 
 Snapshots can also be stored and loaded with:
 
+```text
 save_snapshot
 load_snapshot
+```
 
 ## 9. Signed persistence
 
@@ -179,17 +200,22 @@ Signed persistence uses Ed25519.
 
 A v2 signed reality binds:
 
+```text
 ARCHIMEDES-KERNEL-SIGNED-REALITY-V2
 + protocol version
 + Reality
 + embedded authority public key
+```
 
 A signed snapshot uses a separate domain:
 
+```text
 ARCHIMEDES-KERNEL-SIGNED-SNAPSHOT-V2
+```
 
 Example:
 
+```rust
 use std::path::Path;
 
 use archimedes_kernel::{
@@ -225,6 +251,7 @@ assert_eq!(
     loaded.public_key,
     expected_public_key
 );
+```
 
 use std::path::Path;
 
@@ -264,13 +291,13 @@ assert_eq!(
 
 Verification rejects:
 
-unsupported protocol versions
-wrong trusted public keys
-modified embedded public keys
-modified signed payloads
-invalid signatures
-invalid movement memory
-hidden drift
+- unsupported protocol versions
+- wrong trusted public keys
+- modified embedded public keys
+- modified signed payloads
+- invalid signatures
+- invalid movement memory
+- hidden drift
 
 The expected public key must come from a trusted channel.
 
@@ -282,11 +309,15 @@ The crate does not automatically migrate v1 files.
 
 The public constant:
 
+```text
 PERSISTENCE_VERSION
+```
 
 currently has the value:
 
+```text
 2
+```
 
 ## 11. Security boundary
 
@@ -296,21 +327,23 @@ A valid signature means the serialized v2 payload verifies against the supplied 
 
 It does not establish:
 
-signer intent
-signing-key custody
-external identity authenticity
-host integrity
-freshness
-revocation status
-rollback resistance
+- signer intent
+- signing-key custody
+- external identity authenticity
+- host integrity
+- freshness
+- revocation status
+- rollback resistance
 
-See THREAT_MODEL.md.
+See `THREAT_MODEL.md`.
 
 ## 12. Unsafe code
 
 The crate root declares:
 
+```rust
 #![forbid(unsafe_code)]
+```
 
 ## 13. Error model
 
@@ -320,25 +353,25 @@ Persistence failures return PersistenceError.
 
 Persistence errors include:
 
-IO failures
-serialization failures
-integrity failures
-signature failures
-unsupported persistence versions
-embedded/trusted public-key mismatch
+- IO failures
+- serialization failures
+- integrity failures
+- signature failures
+- unsupported persistence versions
+- embedded/trusted public-key mismatch
 
 ## 14. Current limitations
 
 The crate does not currently provide:
 
-multi-reality orchestration
-networking
-database integration
-UI
-key rotation
-key revocation
-replay prevention
-rollback prevention
-cross-version persistence migration
+- multi-reality orchestration
+- networking
+- database integration
+- UI
+- key rotation
+- key revocation
+- replay prevention
+- rollback prevention
+- cross-version persistence migration
 
 Use it as infrastructure, not as an end-user security product.

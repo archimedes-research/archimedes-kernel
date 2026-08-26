@@ -43,6 +43,7 @@ domain separator
 protocol version
 payload
 authority public key
+```
 
 Signed realities and signed snapshots use separate domain separators.
 
@@ -130,7 +131,9 @@ Signed artifacts include an explicit protocol version.
 
 The supported version is:
 
+```text
 2
+```
 
 Version 2 uses Postcard serialization.
 
