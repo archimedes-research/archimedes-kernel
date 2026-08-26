@@ -21,7 +21,7 @@ It does not provide networking, database storage, UI, external identity verifica
 
 ## 2. Dependency
 
-After v2.0.0 is published to crates.io:
+For the published v2.0.0 crate:
 
 ```toml
 [dependencies]
@@ -252,42 +252,6 @@ assert_eq!(
     expected_public_key
 );
 ```
-
-use std::path::Path;
-
-use archimedes_kernel::{
-    load_signed_reality,
-    save_signed_reality,
-    sign_reality,
-};
-
-use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
-
-let mut csprng = OsRng;
-let signing_key = SigningKey::generate(&mut csprng);
-
-let expected_public_key =
-    signing_key.verifying_key().to_bytes();
-
-let signed =
-    sign_reality(&reality, &signing_key)?;
-
-save_signed_reality(
-    &signed,
-    Path::new("signed-reality.bin"),
-)?;
-
-let loaded = load_signed_reality(
-    Path::new("signed-reality.bin"),
-    &expected_public_key,
-)?;
-
-assert_eq!(loaded.reality, reality);
-assert_eq!(
-    loaded.public_key,
-    expected_public_key
-);
 
 Verification rejects:
 

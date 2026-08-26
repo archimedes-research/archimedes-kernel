@@ -55,7 +55,7 @@ See `THREAT_MODEL.md` for the complete boundary.
 
 ## Quickstart
 
-After v2.0.0 is published to crates.io:
+For the published v2.0.0 crate:
 
 ```toml
 [dependencies]
