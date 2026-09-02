@@ -17,7 +17,8 @@ pub use primitives::{Boundary, Identity, Law, Reality, State};
 pub use verification::{
     detect_drift, plan_sequence, simulate_sequence, Continuity, DriftCheck, Inspection,
     IntegrityReport, MovementError, PlannedSequence, PreflightReport, ProofResult, RealityDiff,
-    RealityFingerprint, RealitySnapshot, Replay, SimulationReport, VerificationReport,
+    RealityFingerprint, RealitySnapshot, Replay, SimulationReport, SnapshotValidationError,
+    VerificationReport,
 };
 
 /// Perform one minimal Archimedean movement.
@@ -195,6 +196,7 @@ mod tests {
                 field: "before".to_string(),
             },
         )
+        .expect("valid Reality construction")
     }
 
     fn multi_step_reality() -> Reality {
@@ -217,6 +219,7 @@ mod tests {
                 field: "before".to_string(),
             },
         )
+        .expect("valid Reality construction")
     }
 
     #[test]

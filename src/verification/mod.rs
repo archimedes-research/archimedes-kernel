@@ -201,6 +201,59 @@ pub struct PreflightReport {
     pub transition_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotValidationError {
+    IdentityMissing,
+    BoundaryMissing,
+    LawMissing,
+    StateMissing,
+    StateOutsideBoundary,
+    InitialStateOutsideBoundary,
+    LawReferencesStateOutsideBoundary,
+    FingerprintMismatch,
+    IntegrityFingerprintMismatch,
+    IntegrityStateMismatch,
+    IntegrityTransitionCountMismatch,
+    MemoryIntegrityNotEstablished,
+    ReplayStateMismatch,
+    ContinuityMismatch,
+    DriftMismatch,
+    HiddenDriftReported,
+    EmptyHistoryMismatch,
+}
+
+impl std::fmt::Display for SnapshotValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for SnapshotValidationError {}
+
+fn fingerprint_components(
+    identity: &Identity,
+    birth_boundary: &Boundary,
+    birth_law: &Law,
+    state: &State,
+    initial_state: &State,
+    memory_hash: HashValue,
+) -> RealityFingerprint {
+    let mut hasher = Sha256::new();
+
+    write_str(&mut hasher, &identity.0);
+    write_string_vec(&mut hasher, &birth_boundary.allowed_values);
+    write_transition_vec(&mut hasher, &birth_law.allowed_transitions);
+    write_str(&mut hasher, &state.field);
+    write_str(&mut hasher, &initial_state.field);
+    hasher.update(memory_hash.0);
+
+    let result = hasher.finalize();
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&result);
+
+    RealityFingerprint(bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RealitySnapshot {
     pub identity: Identity,
@@ -217,7 +270,118 @@ pub struct RealitySnapshot {
 }
 
 impl RealitySnapshot {
+    pub fn validate(&self) -> Result<(), SnapshotValidationError> {
+        if self.identity.0.is_empty() {
+            return Err(SnapshotValidationError::IdentityMissing);
+        }
+
+        if self.boundary.allowed_values.is_empty() || self.birth_boundary.allowed_values.is_empty()
+        {
+            return Err(SnapshotValidationError::BoundaryMissing);
+        }
+
+        if self.law.allowed_transitions.is_empty() || self.birth_law.allowed_transitions.is_empty()
+        {
+            return Err(SnapshotValidationError::LawMissing);
+        }
+
+        if self.state.field.is_empty() || self.initial_state.field.is_empty() {
+            return Err(SnapshotValidationError::StateMissing);
+        }
+
+        if !self.boundary.allowed_values.contains(&self.state.field) {
+            return Err(SnapshotValidationError::StateOutsideBoundary);
+        }
+
+        if !self
+            .birth_boundary
+            .allowed_values
+            .contains(&self.initial_state.field)
+        {
+            return Err(SnapshotValidationError::InitialStateOutsideBoundary);
+        }
+
+        let active_law_inside_boundary = self.law.allowed_transitions.iter().all(|(from, to)| {
+            self.boundary.allowed_values.contains(from) && self.boundary.allowed_values.contains(to)
+        });
+
+        let birth_law_inside_boundary =
+            self.birth_law.allowed_transitions.iter().all(|(from, to)| {
+                self.birth_boundary.allowed_values.contains(from)
+                    && self.birth_boundary.allowed_values.contains(to)
+            });
+
+        if !active_law_inside_boundary || !birth_law_inside_boundary {
+            return Err(SnapshotValidationError::LawReferencesStateOutsideBoundary);
+        }
+
+        let expected_fingerprint = fingerprint_components(
+            &self.identity,
+            &self.birth_boundary,
+            &self.birth_law,
+            &self.state,
+            &self.initial_state,
+            self.memory_hash,
+        );
+
+        if self.fingerprint != expected_fingerprint {
+            return Err(SnapshotValidationError::FingerprintMismatch);
+        }
+
+        if self.integrity.fingerprint != self.fingerprint {
+            return Err(SnapshotValidationError::IntegrityFingerprintMismatch);
+        }
+
+        if self.integrity.state != self.state {
+            return Err(SnapshotValidationError::IntegrityStateMismatch);
+        }
+
+        if self.integrity.transition_count != self.transition_count {
+            return Err(SnapshotValidationError::IntegrityTransitionCountMismatch);
+        }
+
+        if !self.integrity.memory_integrity {
+            return Err(SnapshotValidationError::MemoryIntegrityNotEstablished);
+        }
+
+        if self.integrity.continuity.preserved != self.integrity.replay.passed {
+            return Err(SnapshotValidationError::ContinuityMismatch);
+        }
+
+        if self.integrity.replay.passed && self.integrity.replay.replayed_state != self.state {
+            return Err(SnapshotValidationError::ReplayStateMismatch);
+        }
+
+        let expected_drift = detect_drift(
+            &self.birth_boundary,
+            &self.birth_law,
+            &self.boundary,
+            &self.law,
+            self.integrity.replay.passed,
+        );
+
+        if self.integrity.drift != expected_drift {
+            return Err(SnapshotValidationError::DriftMismatch);
+        }
+
+        if self.integrity.drift.hidden_drift_required {
+            return Err(SnapshotValidationError::HiddenDriftReported);
+        }
+
+        if self.transition_count == 0
+            && (self.memory_hash != HashValue([0u8; 32]) || self.state != self.initial_state)
+        {
+            return Err(SnapshotValidationError::EmptyHistoryMismatch);
+        }
+
+        Ok(())
+    }
+
     pub fn matches_current(&self, reality: &Reality) -> bool {
+        if self.validate().is_err() {
+            return false;
+        }
+
         let diff = self.diff_against(reality);
         diff.identity_same
             && diff.boundary_same
@@ -422,18 +586,14 @@ impl Reality {
         )
     }
     pub fn fingerprint(&self) -> RealityFingerprint {
-        let mut hasher = Sha256::new();
-        write_str(&mut hasher, &self.identity.0);
-        write_string_vec(&mut hasher, &self.birth_boundary.allowed_values);
-        write_transition_vec(&mut hasher, &self.birth_law.allowed_transitions);
-        write_str(&mut hasher, &self.state.field);
-        write_str(&mut hasher, &self.initial_state.field);
-        hasher.update(self.memory.current_hash().0);
-
-        let result = hasher.finalize();
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&result);
-        RealityFingerprint(bytes)
+        fingerprint_components(
+            &self.identity,
+            &self.birth_boundary,
+            &self.birth_law,
+            &self.state,
+            &self.initial_state,
+            self.memory.current_hash(),
+        )
     }
     pub fn integrity_report(&self) -> IntegrityReport {
         IntegrityReport {
@@ -495,7 +655,7 @@ impl Reality {
         }
     }
     pub fn snapshot(&self) -> RealitySnapshot {
-        RealitySnapshot {
+        let snapshot = RealitySnapshot {
             identity: self.identity.clone(),
             boundary: self.boundary.clone(),
             law: self.law.clone(),
@@ -507,7 +667,11 @@ impl Reality {
             transition_count: self.memory.transitions.len(),
             fingerprint: self.fingerprint(),
             integrity: self.integrity_report(),
-        }
+        };
+
+        debug_assert!(snapshot.validate().is_ok());
+
+        snapshot
     }
 }
 

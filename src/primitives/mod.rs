@@ -28,7 +28,7 @@ pub struct State {
     pub field: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Reality {
     pub(crate) identity: Identity,
     pub(crate) boundary: Boundary,
@@ -43,9 +43,58 @@ pub struct Reality {
     pub(crate) test_hook: Option<fn(&mut Reality)>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RealityWire {
+    identity: Identity,
+    boundary: Boundary,
+    law: Law,
+    state: State,
+    initial_state: State,
+    memory: MovementMemory,
+    birth_boundary: Boundary,
+    birth_law: Law,
+}
+
+impl RealityWire {
+    pub(crate) fn into_validated(self) -> Result<Reality, crate::verification::MovementError> {
+        let reality = Reality {
+            identity: self.identity,
+            boundary: self.boundary,
+            law: self.law,
+            state: self.state,
+            initial_state: self.initial_state,
+            memory: self.memory,
+            birth_boundary: self.birth_boundary,
+            birth_law: self.birth_law,
+            #[cfg(test)]
+            test_hook: None,
+        };
+
+        reality.validate()?;
+
+        Ok(reality)
+    }
+}
+
+impl<'de> Deserialize<'de> for Reality {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RealityWire::deserialize(deserializer)?;
+
+        wire.into_validated().map_err(serde::de::Error::custom)
+    }
+}
+
 impl Reality {
-    pub fn new(identity: Identity, boundary: Boundary, law: Law, state: State) -> Self {
-        Self {
+    pub fn new(
+        identity: Identity,
+        boundary: Boundary,
+        law: Law,
+        state: State,
+    ) -> Result<Self, crate::verification::MovementError> {
+        let reality = Self {
             identity,
             boundary: boundary.clone(),
             law: law.clone(),
@@ -56,7 +105,11 @@ impl Reality {
             birth_law: law,
             #[cfg(test)]
             test_hook: None,
-        }
+        };
+
+        reality.validate()?;
+
+        Ok(reality)
     }
 
     pub fn identity(&self) -> &Identity {

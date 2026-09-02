@@ -30,7 +30,8 @@ fn main() {
         State {
             field: "before".to_string(),
         },
-    );
+    )
+    .expect("valid Reality construction");
 
     let original = reality.clone();
 

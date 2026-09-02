@@ -1,11 +1,15 @@
-use std::fs;
-use std::io;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::primitives::RealityWire;
+use crate::verification::{MovementError, SnapshotValidationError};
 use crate::{Reality, RealitySnapshot};
 
 pub const PERSISTENCE_VERSION: u8 = 2;
@@ -18,23 +22,35 @@ pub enum PersistenceError {
     Io(io::Error),
     Serialization(postcard::Error),
     IntegrityFailure(&'static str),
+    SemanticValidity(MovementError),
+    SnapshotValidity(SnapshotValidationError),
     Signature(&'static str),
     UnsupportedVersion { expected: u8, found: u8 },
     PublicKeyMismatch,
+    TrailingData { bytes: usize },
+    DurabilityIndeterminate(io::Error),
 }
 
 impl std::fmt::Display for PersistenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PersistenceError::Io(e) => write!(f, "IO error: {e}"),
-            PersistenceError::Serialization(e) => {
-                write!(f, "Serialization error: {e}")
+            PersistenceError::Io(error) => {
+                write!(f, "IO error: {error}")
             }
-            PersistenceError::IntegrityFailure(msg) => {
-                write!(f, "Integrity failure: {msg}")
+            PersistenceError::Serialization(error) => {
+                write!(f, "Serialization error: {error}")
             }
-            PersistenceError::Signature(msg) => {
-                write!(f, "Signature failure: {msg}")
+            PersistenceError::IntegrityFailure(message) => {
+                write!(f, "Integrity failure: {message}")
+            }
+            PersistenceError::SemanticValidity(error) => {
+                write!(f, "Reality semantic validity failure: {error}")
+            }
+            PersistenceError::SnapshotValidity(error) => {
+                write!(f, "Snapshot validity failure: {error}")
+            }
+            PersistenceError::Signature(message) => {
+                write!(f, "Signature failure: {message}")
             }
             PersistenceError::UnsupportedVersion { expected, found } => {
                 write!(
@@ -48,6 +64,18 @@ impl std::fmt::Display for PersistenceError {
                     "Embedded public key does not match expected authority key"
                 )
             }
+            PersistenceError::TrailingData { bytes } => {
+                write!(
+                    f,
+                    "Persistence artifact contains {bytes} unexplained trailing bytes"
+                )
+            }
+            PersistenceError::DurabilityIndeterminate(error) => {
+                write!(
+                    f,
+                    "Destination replacement occurred but directory durability could not be confirmed: {error}"
+                )
+            }
         }
     }
 }
@@ -55,24 +83,159 @@ impl std::fmt::Display for PersistenceError {
 impl std::error::Error for PersistenceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            PersistenceError::Io(e) => Some(e),
+            PersistenceError::Io(error) => Some(error),
+            PersistenceError::SemanticValidity(error) => Some(error),
+            PersistenceError::SnapshotValidity(error) => Some(error),
+            PersistenceError::DurabilityIndeterminate(error) => Some(error),
             PersistenceError::Serialization(_)
             | PersistenceError::IntegrityFailure(_)
             | PersistenceError::Signature(_)
             | PersistenceError::UnsupportedVersion { .. }
-            | PersistenceError::PublicKeyMismatch => None,
+            | PersistenceError::PublicKeyMismatch
+            | PersistenceError::TrailingData { .. } => None,
         }
     }
 }
 
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn parent_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn create_temp_sibling(path: &Path) -> Result<(PathBuf, File), PersistenceError> {
+    let parent = parent_directory(path);
+
+    let file_name = path.file_name().ok_or_else(|| {
+        PersistenceError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "persistence destination has no file name",
+        ))
+    })?;
+
+    for _ in 0..32 {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+
+        let temp_name = format!(
+            ".{}.archimedes-tmp-{}-{timestamp}-{counter}",
+            file_name.to_string_lossy(),
+            std::process::id(),
+        );
+
+        let temp_path = parent.join(temp_name);
+
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => {
+                return Ok((temp_path, file));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                continue;
+            }
+            Err(error) => {
+                return Err(PersistenceError::Io(error));
+            }
+        }
+    }
+
+    Err(PersistenceError::Io(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate unique sibling persistence temporary file",
+    )))
+}
+
+#[cfg(unix)]
+fn sync_parent_after_rename(path: &Path) -> io::Result<()> {
+    File::open(parent_directory(path))?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_after_rename(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+fn write_bytes_crash_conscious_with<F>(
+    path: &Path,
+    bytes: &[u8],
+    before_rename: F,
+) -> Result<(), PersistenceError>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
+    let (temp_path, mut file) = create_temp_sibling(path)?;
+
+    if let Err(error) = file.write_all(bytes) {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(PersistenceError::Io(error));
+    }
+
+    if let Err(error) = file.sync_all() {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(PersistenceError::Io(error));
+    }
+
+    drop(file);
+
+    if let Err(error) = before_rename(&temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(PersistenceError::Io(error));
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(PersistenceError::Io(error));
+    }
+
+    sync_parent_after_rename(path).map_err(PersistenceError::DurabilityIndeterminate)
+}
+
+fn write_bytes_crash_conscious(path: &Path, bytes: &[u8]) -> Result<(), PersistenceError> {
+    write_bytes_crash_conscious_with(path, bytes, |_| Ok(()))
+}
+
 fn write_postcard<T: Serialize>(path: &Path, value: &T) -> Result<(), PersistenceError> {
     let bytes = postcard::to_allocvec(value).map_err(PersistenceError::Serialization)?;
-    fs::write(path, bytes).map_err(PersistenceError::Io)
+
+    write_bytes_crash_conscious(path, &bytes)
+}
+
+#[cfg(test)]
+fn write_postcard_with_pre_rename_failure<T: Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), PersistenceError> {
+    let bytes = postcard::to_allocvec(value).map_err(PersistenceError::Serialization)?;
+
+    write_bytes_crash_conscious_with(path, &bytes, |_| {
+        Err(io::Error::other("injected pre-rename persistence failure"))
+    })
 }
 
 fn read_postcard<T: DeserializeOwned>(path: &Path) -> Result<T, PersistenceError> {
     let bytes = fs::read(path).map_err(PersistenceError::Io)?;
-    postcard::from_bytes(&bytes).map_err(PersistenceError::Serialization)
+
+    let (value, trailing) =
+        postcard::take_from_bytes(&bytes).map_err(PersistenceError::Serialization)?;
+
+    if !trailing.is_empty() {
+        return Err(PersistenceError::TrailingData {
+            bytes: trailing.len(),
+        });
+    }
+
+    Ok(value)
 }
 
 fn check_version(found: u8) -> Result<(), PersistenceError> {
@@ -84,6 +247,18 @@ fn check_version(found: u8) -> Result<(), PersistenceError> {
     }
 
     Ok(())
+}
+
+fn validate_reality(reality: &Reality) -> Result<(), PersistenceError> {
+    reality
+        .validate()
+        .map_err(PersistenceError::SemanticValidity)
+}
+
+fn validate_snapshot(snapshot: &RealitySnapshot) -> Result<(), PersistenceError> {
+    snapshot
+        .validate()
+        .map_err(PersistenceError::SnapshotValidity)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +274,8 @@ struct PersistedSnapshot {
 }
 
 pub fn save_reality(reality: &Reality, path: &Path) -> Result<(), PersistenceError> {
+    validate_reality(reality)?;
+
     let persisted = PersistedReality {
         persistence_version: PERSISTENCE_VERSION,
         reality: reality.clone(),
@@ -114,20 +291,14 @@ pub fn load_reality(path: &Path) -> Result<Reality, PersistenceError> {
 
     let reality = persisted.reality;
 
-    if !reality.memory_integrity() {
-        return Err(PersistenceError::IntegrityFailure(
-            "movement memory integrity failed",
-        ));
-    }
-
-    if reality.drift_check().hidden_drift_required {
-        return Err(PersistenceError::IntegrityFailure("hidden drift detected"));
-    }
+    validate_reality(&reality)?;
 
     Ok(reality)
 }
 
 pub fn save_snapshot(snapshot: &RealitySnapshot, path: &Path) -> Result<(), PersistenceError> {
+    validate_snapshot(snapshot)?;
+
     let persisted = PersistedSnapshot {
         persistence_version: PERSISTENCE_VERSION,
         snapshot: snapshot.clone(),
@@ -140,6 +311,8 @@ pub fn load_snapshot(path: &Path) -> Result<RealitySnapshot, PersistenceError> {
     let persisted: PersistedSnapshot = read_postcard(path)?;
 
     check_version(persisted.persistence_version)?;
+
+    validate_snapshot(&persisted.snapshot)?;
 
     Ok(persisted.snapshot)
 }
@@ -205,6 +378,8 @@ pub fn sign_reality(
     reality: &Reality,
     signing_key: &SigningKey,
 ) -> Result<SignedReality, PersistenceError> {
+    validate_reality(reality)?;
+
     let public_key = signing_key.verifying_key().to_bytes();
 
     let signable = SignableReality {
@@ -227,20 +402,9 @@ pub fn sign_reality(
 }
 
 pub fn save_signed_reality(signed: &SignedReality, path: &Path) -> Result<(), PersistenceError> {
-    write_postcard(path, signed)
-}
-
-pub fn load_signed_reality(
-    path: &Path,
-    expected_public_key: &[u8; 32],
-) -> Result<SignedReality, PersistenceError> {
-    let signed: SignedReality = read_postcard(path)?;
-
     check_version(signed.protocol_version)?;
 
-    if signed.public_key != *expected_public_key {
-        return Err(PersistenceError::PublicKeyMismatch);
-    }
+    validate_reality(&signed.reality)?;
 
     let signable = SignableReality {
         domain: REALITY_DOMAIN,
@@ -251,25 +415,69 @@ pub fn load_signed_reality(
 
     let message = postcard::to_allocvec(&signable).map_err(PersistenceError::Serialization)?;
 
+    verify_bytes(&message, &signed.public_key, &signed.signature)?;
+
+    write_postcard(path, signed)
+}
+
+#[derive(Deserialize)]
+struct SignedRealityWire {
+    protocol_version: u8,
+    reality: RealityWire,
+    public_key: [u8; 32],
+    signature: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct SignableRealityWire<'a> {
+    domain: &'a [u8],
+    protocol_version: u8,
+    reality: &'a RealityWire,
+    public_key: [u8; 32],
+}
+
+pub fn load_signed_reality(
+    path: &Path,
+    expected_public_key: &[u8; 32],
+) -> Result<SignedReality, PersistenceError> {
+    let signed: SignedRealityWire = read_postcard(path)?;
+
+    check_version(signed.protocol_version)?;
+
+    if signed.public_key != *expected_public_key {
+        return Err(PersistenceError::PublicKeyMismatch);
+    }
+
+    let signable = SignableRealityWire {
+        domain: REALITY_DOMAIN,
+        protocol_version: signed.protocol_version,
+        reality: &signed.reality,
+        public_key: signed.public_key,
+    };
+
+    let message = postcard::to_allocvec(&signable).map_err(PersistenceError::Serialization)?;
+
     verify_bytes(&message, expected_public_key, &signed.signature)?;
 
-    if !signed.reality.memory_integrity() {
-        return Err(PersistenceError::IntegrityFailure(
-            "movement memory integrity failed",
-        ));
-    }
+    let reality = signed
+        .reality
+        .into_validated()
+        .map_err(PersistenceError::SemanticValidity)?;
 
-    if signed.reality.drift_check().hidden_drift_required {
-        return Err(PersistenceError::IntegrityFailure("hidden drift detected"));
-    }
-
-    Ok(signed)
+    Ok(SignedReality {
+        protocol_version: signed.protocol_version,
+        reality,
+        public_key: signed.public_key,
+        signature: signed.signature,
+    })
 }
 
 pub fn sign_snapshot(
     snapshot: &RealitySnapshot,
     signing_key: &SigningKey,
 ) -> Result<SignedSnapshot, PersistenceError> {
+    validate_snapshot(snapshot)?;
+
     let public_key = signing_key.verifying_key().to_bytes();
 
     let signable = SignableSnapshot {
@@ -292,6 +500,21 @@ pub fn sign_snapshot(
 }
 
 pub fn save_signed_snapshot(signed: &SignedSnapshot, path: &Path) -> Result<(), PersistenceError> {
+    check_version(signed.protocol_version)?;
+
+    validate_snapshot(&signed.snapshot)?;
+
+    let signable = SignableSnapshot {
+        domain: SNAPSHOT_DOMAIN,
+        protocol_version: signed.protocol_version,
+        snapshot: &signed.snapshot,
+        public_key: signed.public_key,
+    };
+
+    let message = postcard::to_allocvec(&signable).map_err(PersistenceError::Serialization)?;
+
+    verify_bytes(&message, &signed.public_key, &signed.signature)?;
+
     write_postcard(path, signed)
 }
 
@@ -317,6 +540,8 @@ pub fn load_signed_snapshot(
     let message = postcard::to_allocvec(&signable).map_err(PersistenceError::Serialization)?;
 
     verify_bytes(&message, expected_public_key, &signed.signature)?;
+
+    validate_snapshot(&signed.snapshot)?;
 
     Ok(signed)
 }
@@ -347,6 +572,7 @@ mod tests {
                 field: "before".to_string(),
             },
         )
+        .expect("valid Reality construction")
     }
 
     fn moved_reality() -> Reality {
@@ -493,7 +719,7 @@ mod tests {
 
         let path = std::env::temp_dir().join("archimedes-v2-key-tamper.bin");
 
-        save_signed_reality(&signed, &path).unwrap();
+        write_postcard(&path, &signed).unwrap();
 
         let result = load_signed_reality(&path, &public_key);
 
@@ -515,7 +741,7 @@ mod tests {
 
         let path = std::env::temp_dir().join("archimedes-v2-payload-tamper.bin");
 
-        save_signed_reality(&signed, &path).unwrap();
+        write_postcard(&path, &signed).unwrap();
 
         let result = load_signed_reality(&path, &public_key);
 
@@ -537,7 +763,7 @@ mod tests {
 
         let path = std::env::temp_dir().join("archimedes-v2-protocol-version.bin");
 
-        save_signed_reality(&signed, &path).unwrap();
+        write_postcard(&path, &signed).unwrap();
 
         let result = load_signed_reality(&path, &public_key);
 
@@ -587,7 +813,7 @@ mod tests {
 
         let path = std::env::temp_dir().join("archimedes-v2-snapshot-key-tamper.bin");
 
-        save_signed_snapshot(&signed, &path).unwrap();
+        write_postcard(&path, &signed).unwrap();
 
         let result = load_signed_snapshot(&path, &public_key);
 
@@ -610,12 +836,75 @@ mod tests {
 
         let path = std::env::temp_dir().join("archimedes-v2-snapshot-tamper.bin");
 
-        save_signed_snapshot(&signed, &path).unwrap();
+        write_postcard(&path, &signed).unwrap();
 
         let result = load_signed_snapshot(&path, &public_key);
 
         assert!(matches!(result, Err(PersistenceError::Signature(_))));
 
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn invalid_reality_is_rejected_before_save_or_sign() {
+        let mut reality = test_reality();
+        reality.identity.0.clear();
+
+        let path = std::env::temp_dir().join(format!(
+            "archimedes-v2-invalid-save-{}.bin",
+            std::process::id(),
+        ));
+
+        let save_result = save_reality(&reality, &path);
+
+        assert!(matches!(
+            save_result,
+            Err(PersistenceError::SemanticValidity(_))
+        ));
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+
+        let sign_result = sign_reality(&reality, &signing_key);
+
+        assert!(matches!(
+            sign_result,
+            Err(PersistenceError::SemanticValidity(_))
+        ));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn injected_pre_rename_failure_preserves_target_and_cleans_temp() {
+        let path = std::env::temp_dir().join(format!(
+            "archimedes-v2-pre-rename-{}.bin",
+            std::process::id(),
+        ));
+
+        std::fs::write(&path, b"ARCHIMEDES-SENTINEL").unwrap();
+
+        let persisted = PersistedReality {
+            persistence_version: PERSISTENCE_VERSION,
+            reality: test_reality(),
+        };
+
+        let result = write_postcard_with_pre_rename_failure(&path, &persisted);
+
+        assert!(matches!(result, Err(PersistenceError::Io(_))));
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"ARCHIMEDES-SENTINEL",);
+
+        let file_name = path.file_name().unwrap().to_string_lossy();
+
+        let prefix = format!(".{file_name}.archimedes-tmp-");
+
+        let residue_exists = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix));
+
+        assert!(!residue_exists);
+
+        let _ = std::fs::remove_file(path);
     }
 }
