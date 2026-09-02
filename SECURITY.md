@@ -56,3 +56,30 @@ Before reporting behavior as a vulnerability, review:
 `THREAT_MODEL.md`
 
 Some behaviors—including replay of an otherwise valid signed artifact, lack of confidentiality, external identity verification, and key revocation—are currently documented limitations rather than implemented security guarantees.
+
+## ARCH-005 3.0.0 qualification delta
+
+The current Engineering candidate separates cryptographic authenticity from semantic validity.
+
+A signed Reality is accepted by the authenticated loader only when:
+
+1. the persistence protocol version is supported;
+2. the embedded public key matches the externally supplied expected public key;
+3. the Ed25519 signature is valid for the neutral persisted wire representation; and
+4. the authenticated Reality satisfies the kernel semantic validity contract.
+
+An invalid signature is reported as an authentication failure.
+
+A correctly authenticated but semantically invalid Reality is reported as a semantic-validity failure.
+
+Snapshot signing and loading likewise require snapshot self-consistency in addition to cryptographic checks.
+
+Persistence framing rejects unexplained trailing bytes.
+
+Local replacement uses a sibling temporary file, complete write, file synchronization, rename, and Unix parent-directory synchronization. A post-rename directory-sync error is explicitly treated as durability indeterminate because replacement may already have occurred.
+
+These controls do not establish signer trust, secure private-key custody, host integrity, freshness, rollback prevention, confidentiality, distributed atomicity, or remote durability.
+
+The crate candidate is version `3.0.0`; persistence protocol version `2` remains intentionally separate.
+
+Independent Assurance of the exact candidate has not yet occurred.

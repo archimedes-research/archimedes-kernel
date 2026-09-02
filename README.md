@@ -1,5 +1,18 @@
 # Archimedes Kernel
 
+## ARCH-005 qualification candidate
+
+The current Engineering branch is an unreleased `archimedes-kernel` `3.0.0` qualification candidate.
+
+`Reality::new` is now fallible and semantic validity is enforced at safe construction, public deserialization, unsigned persistence, signed persistence, and snapshot boundaries.
+
+The crate major version is `3.0.0`; the valid persistence protocol remains version `2`.
+
+Current qualified-behavior documentation is in `docs/public-api-v3.0.md`.
+
+This Engineering state has not yet received independent Assurance and is not a final ARCHIMEDES name-fitness decision.
+
+
 A minimal Rust kernel for deterministic state transition, tamper-evident movement memory, replay, continuity verification, drift detection, and versioned persistence.
 
 ## Status
@@ -96,7 +109,7 @@ let mut reality = Reality::new(
     State {
         field: "before".to_string(),
     },
-);
+).expect("valid Reality construction");
 
 let events = vec![
     Event {

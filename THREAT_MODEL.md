@@ -148,3 +148,31 @@ The kernel's objective is narrow:
 Make permitted state movement explicit, record that movement in tamper-evident memory, make continuity and drift inspectable, and allow persisted state to be authenticated when an external trusted signing key is available.
 
 Claims beyond that boundary are not made.
+
+## ARCH-005 3.0.0 qualification delta
+
+The ARCH-005 Engineering correction strengthens the kernel boundary without expanding the kernel into a general security system.
+
+The current qualification candidate enforces semantic Reality validity at safe construction, public deserialization, persistence, and signed-persistence boundaries.
+
+Movement-memory cryptographic linkage and semantic state continuity are treated as distinct properties.
+
+Signed Reality loading authenticates the persisted wire representation relative to the caller-supplied expected public key before converting that authenticated wire into a semantically valid Reality.
+
+Crash-conscious persistence is bounded to local file replacement and does not provide distributed atomicity.
+
+The following remain outside the kernel trust guarantee:
+
+- establishment of the real-world identity represented by an identity string;
+- trustworthiness or authorization of the signing entity;
+- host or operating-system integrity;
+- confidentiality;
+- freshness and rollback prevention;
+- secure key storage;
+- distributed consensus;
+- remote durability; and
+- semantic correctness of caller-supplied domain meaning beyond kernel-checkable invariants.
+
+The crate candidate is version `3.0.0`. Persistence protocol version `2` remains a separate protocol identity.
+
+This section describes Engineering state only. Independent Assurance remains pending.

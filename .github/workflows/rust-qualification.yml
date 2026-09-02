@@ -1,0 +1,48 @@
+name: Rust Qualification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Exact Rust qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Verify exact Rust toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(rustc --version)" = "rustc 1.93.1 (01f6ddf75 2026-02-11)"
+          test "$(cargo --version)" = "cargo 1.93.1 (083ac5135 2025-12-15)"
+          test "$(rustc -Vv | sha256sum | awk '{print $1}')" = "b1008d5f7681db91d446d2bb0a07af00372bb6cb4d4599e95212e3a8edce4e11"
+          rustup show active-toolchain
+
+      - name: Locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build and type-check
+        run: cargo check --locked --all-targets --all-features
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Documentation tests
+        run: cargo test --locked --doc
