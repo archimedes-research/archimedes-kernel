@@ -22,6 +22,8 @@ Callers must explicitly handle construction failure.
 
 Public deserialization of `Reality` is also validity-enforcing.
 
+The valid state-value domain is non-empty strings. The rule applies to current and initial state values, active and birth `Boundary` members, and active and birth `Law` endpoints. Empty values are rejected as `StateMissing`; `Law::check`, preflight, and movement execution do not treat an empty proposed value as a lawful executable state.
+
 ## Movement semantics
 
 A successful movement must remain inside the active Boundary.

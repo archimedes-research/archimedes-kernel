@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::movement::{Event, MovementMemory};
 
+pub(crate) fn is_valid_state_value(value: &str) -> bool {
+    !value.is_empty()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity(pub String);
 
@@ -10,22 +14,57 @@ pub struct Boundary {
     pub allowed_values: Vec<String>,
 }
 
+impl Boundary {
+    pub(crate) fn has_valid_state_domain(&self) -> bool {
+        !self.allowed_values.is_empty()
+            && self
+                .allowed_values
+                .iter()
+                .all(|value| is_valid_state_value(value))
+    }
+
+    pub(crate) fn contains_state_value(&self, value: &str) -> bool {
+        is_valid_state_value(value) && self.allowed_values.iter().any(|allowed| allowed == value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Law {
     pub allowed_transitions: Vec<(String, String)>,
 }
 
 impl Law {
+    pub(crate) fn has_valid_state_domain(&self) -> bool {
+        !self.allowed_transitions.is_empty()
+            && self
+                .allowed_transitions
+                .iter()
+                .all(|(from, to)| is_valid_state_value(from) && is_valid_state_value(to))
+    }
+
     pub fn check(&self, current_state: &State, event: &Event) -> bool {
-        self.allowed_transitions
-            .iter()
-            .any(|(from, to)| from == &current_state.field && to == &event.proposed_field)
+        if !current_state.is_valid() || !is_valid_state_value(&event.proposed_field) {
+            return false;
+        }
+
+        self.allowed_transitions.iter().any(|(from, to)| {
+            is_valid_state_value(from)
+                && is_valid_state_value(to)
+                && from == &current_state.field
+                && to == &event.proposed_field
+        })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
     pub field: String,
+}
+
+impl State {
+    pub(crate) fn is_valid(&self) -> bool {
+        is_valid_state_value(&self.field)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -6,6 +6,8 @@ The current Engineering branch is an unreleased `archimedes-kernel` `3.0.0` qual
 
 `Reality::new` is now fallible and semantic validity is enforced at safe construction, public deserialization, unsigned persistence, signed persistence, and snapshot boundaries.
 
+For the `3.0.0` qualification candidate, a valid state value is a non-empty string. Empty strings are rejected as `StateMissing` when they appear as the current or initial state, a `Boundary` member, or a `Law` endpoint; movement and preflight use the same state-value rule.
+
 The crate major version is `3.0.0`; the valid persistence protocol remains version `2`.
 
 Current qualified-behavior documentation is in `docs/public-api-v3.0.md`.

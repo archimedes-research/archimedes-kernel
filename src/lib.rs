@@ -29,15 +29,11 @@ pub use verification::{
 pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResult, MovementError> {
     reality.validate()?;
 
-    if event.proposed_field.is_empty() {
+    if !crate::primitives::is_valid_state_value(&event.proposed_field) {
         return Err(MovementError::StateMissing);
     }
 
-    if !reality
-        .boundary
-        .allowed_values
-        .contains(&event.proposed_field)
-    {
+    if !reality.boundary.contains_state_value(&event.proposed_field) {
         return Err(MovementError::StateOutsideBoundary);
     }
 

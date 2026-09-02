@@ -280,35 +280,43 @@ impl RealitySnapshot {
             return Err(SnapshotValidationError::BoundaryMissing);
         }
 
+        if !self.boundary.has_valid_state_domain() || !self.birth_boundary.has_valid_state_domain()
+        {
+            return Err(SnapshotValidationError::StateMissing);
+        }
+
         if self.law.allowed_transitions.is_empty() || self.birth_law.allowed_transitions.is_empty()
         {
             return Err(SnapshotValidationError::LawMissing);
         }
 
-        if self.state.field.is_empty() || self.initial_state.field.is_empty() {
+        if !self.law.has_valid_state_domain() || !self.birth_law.has_valid_state_domain() {
             return Err(SnapshotValidationError::StateMissing);
         }
 
-        if !self.boundary.allowed_values.contains(&self.state.field) {
+        if !self.state.is_valid() || !self.initial_state.is_valid() {
+            return Err(SnapshotValidationError::StateMissing);
+        }
+
+        if !self.boundary.contains_state_value(&self.state.field) {
             return Err(SnapshotValidationError::StateOutsideBoundary);
         }
 
         if !self
             .birth_boundary
-            .allowed_values
-            .contains(&self.initial_state.field)
+            .contains_state_value(&self.initial_state.field)
         {
             return Err(SnapshotValidationError::InitialStateOutsideBoundary);
         }
 
         let active_law_inside_boundary = self.law.allowed_transitions.iter().all(|(from, to)| {
-            self.boundary.allowed_values.contains(from) && self.boundary.allowed_values.contains(to)
+            self.boundary.contains_state_value(from) && self.boundary.contains_state_value(to)
         });
 
         let birth_law_inside_boundary =
             self.birth_law.allowed_transitions.iter().all(|(from, to)| {
-                self.birth_boundary.allowed_values.contains(from)
-                    && self.birth_boundary.allowed_values.contains(to)
+                self.birth_boundary.contains_state_value(from)
+                    && self.birth_boundary.contains_state_value(to)
             });
 
         if !active_law_inside_boundary || !birth_law_inside_boundary {
@@ -422,35 +430,43 @@ impl Reality {
             return Err(MovementError::BoundaryMissing);
         }
 
+        if !self.boundary.has_valid_state_domain() || !self.birth_boundary.has_valid_state_domain()
+        {
+            return Err(MovementError::StateMissing);
+        }
+
         if self.law.allowed_transitions.is_empty() || self.birth_law.allowed_transitions.is_empty()
         {
             return Err(MovementError::LawMissing);
         }
 
-        if self.state.field.is_empty() || self.initial_state.field.is_empty() {
+        if !self.law.has_valid_state_domain() || !self.birth_law.has_valid_state_domain() {
             return Err(MovementError::StateMissing);
         }
 
-        if !self.boundary.allowed_values.contains(&self.state.field) {
+        if !self.state.is_valid() || !self.initial_state.is_valid() {
+            return Err(MovementError::StateMissing);
+        }
+
+        if !self.boundary.contains_state_value(&self.state.field) {
             return Err(MovementError::StateOutsideBoundary);
         }
 
         if !self
             .birth_boundary
-            .allowed_values
-            .contains(&self.initial_state.field)
+            .contains_state_value(&self.initial_state.field)
         {
             return Err(MovementError::InitialStateOutsideBoundary);
         }
 
         let active_law_inside_boundary = self.law.allowed_transitions.iter().all(|(from, to)| {
-            self.boundary.allowed_values.contains(from) && self.boundary.allowed_values.contains(to)
+            self.boundary.contains_state_value(from) && self.boundary.contains_state_value(to)
         });
 
         let birth_law_inside_boundary =
             self.birth_law.allowed_transitions.iter().all(|(from, to)| {
-                self.birth_boundary.allowed_values.contains(from)
-                    && self.birth_boundary.allowed_values.contains(to)
+                self.birth_boundary.contains_state_value(from)
+                    && self.birth_boundary.contains_state_value(to)
             });
 
         if !active_law_inside_boundary || !birth_law_inside_boundary {
