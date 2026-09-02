@@ -102,6 +102,11 @@ pub enum MovementError {
     DriftCheckDetectedHiddenLawGrowth,
     DriftCheckDetectedPermissionDrift,
     ProofResultDeclaresPassWithoutEvidence,
+    InitialStateOutsideBoundary,
+    LawReferencesStateOutsideBoundary,
+    MovementMemoryIntegrityInvalid,
+    MovementHistoryDiscontinuous,
+    MovementHistoryNotGroundedInLaw,
 }
 
 impl std::fmt::Display for MovementError {
@@ -243,6 +248,106 @@ impl RealitySnapshot {
 }
 
 impl Reality {
+    pub fn validate(&self) -> Result<(), MovementError> {
+        if self.identity.0.is_empty() {
+            return Err(MovementError::IdentityMissingOrUnstable);
+        }
+
+        if self.boundary.allowed_values.is_empty() || self.birth_boundary.allowed_values.is_empty()
+        {
+            return Err(MovementError::BoundaryMissing);
+        }
+
+        if self.law.allowed_transitions.is_empty() || self.birth_law.allowed_transitions.is_empty()
+        {
+            return Err(MovementError::LawMissing);
+        }
+
+        if self.state.field.is_empty() || self.initial_state.field.is_empty() {
+            return Err(MovementError::StateMissing);
+        }
+
+        if !self.boundary.allowed_values.contains(&self.state.field) {
+            return Err(MovementError::StateOutsideBoundary);
+        }
+
+        if !self
+            .birth_boundary
+            .allowed_values
+            .contains(&self.initial_state.field)
+        {
+            return Err(MovementError::InitialStateOutsideBoundary);
+        }
+
+        let active_law_inside_boundary = self.law.allowed_transitions.iter().all(|(from, to)| {
+            self.boundary.allowed_values.contains(from) && self.boundary.allowed_values.contains(to)
+        });
+
+        let birth_law_inside_boundary =
+            self.birth_law.allowed_transitions.iter().all(|(from, to)| {
+                self.birth_boundary.allowed_values.contains(from)
+                    && self.birth_boundary.allowed_values.contains(to)
+            });
+
+        if !active_law_inside_boundary || !birth_law_inside_boundary {
+            return Err(MovementError::LawReferencesStateOutsideBoundary);
+        }
+
+        if !self.memory.verify_integrity() {
+            return Err(MovementError::MovementMemoryIntegrityInvalid);
+        }
+
+        if !self.memory.verify_semantic_continuity(&self.initial_state) {
+            return Err(MovementError::MovementHistoryDiscontinuous);
+        }
+
+        for transition in &self.memory.transitions {
+            if !transition.law_check_valid {
+                return Err(MovementError::MovementHistoryNotGroundedInLaw);
+            }
+
+            let event = Event {
+                proposed_field: transition.after.field.clone(),
+            };
+
+            if !self.birth_law.check(&transition.before, &event) {
+                return Err(MovementError::MovementHistoryNotGroundedInLaw);
+            }
+        }
+
+        let replay = self.replay();
+
+        if !replay.passed {
+            return Err(MovementError::DriftCheckDetectedHiddenStateMutation);
+        }
+
+        let drift = detect_drift(
+            &self.birth_boundary,
+            &self.birth_law,
+            &self.boundary,
+            &self.law,
+            replay.passed,
+        );
+
+        if drift.hidden_state_mutation_detected {
+            return Err(MovementError::DriftCheckDetectedHiddenStateMutation);
+        }
+
+        if drift.hidden_boundary_growth_detected {
+            return Err(MovementError::DriftCheckDetectedHiddenBoundaryGrowth);
+        }
+
+        if drift.hidden_law_growth_detected {
+            return Err(MovementError::DriftCheckDetectedHiddenLawGrowth);
+        }
+
+        if drift.permission_drift_detected {
+            return Err(MovementError::DriftCheckDetectedPermissionDrift);
+        }
+
+        Ok(())
+    }
+
     pub fn inspect(&self) -> Inspection {
         Inspection {
             initial_state: self.initial_state.clone(),
@@ -251,23 +356,41 @@ impl Reality {
         }
     }
     pub fn replay(&self) -> Replay {
-        if !self.memory.verify_integrity() {
+        if !self.memory.verify_integrity()
+            || !self.memory.verify_semantic_continuity(&self.initial_state)
+        {
             return Replay {
                 replayed_state: self.initial_state.clone(),
                 passed: false,
             };
         }
+
         let mut replayed_state = self.initial_state.clone();
-        for t in &self.memory.transitions {
-            if !t.law_check_valid {
+
+        for transition in &self.memory.transitions {
+            if !transition.law_check_valid || transition.before != replayed_state {
                 return Replay {
                     replayed_state,
                     passed: false,
                 };
             }
-            replayed_state = t.after.clone();
+
+            let event = Event {
+                proposed_field: transition.after.field.clone(),
+            };
+
+            if !self.birth_law.check(&transition.before, &event) {
+                return Replay {
+                    replayed_state,
+                    passed: false,
+                };
+            }
+
+            replayed_state = transition.after.clone();
         }
+
         let passed = replayed_state == self.state;
+
         Replay {
             replayed_state,
             passed,
@@ -324,13 +447,8 @@ impl Reality {
         }
     }
     pub fn would_accept(&self, event: &Event) -> bool {
-        if event.proposed_field.is_empty() {
-            return false;
-        }
-        if !self.boundary.allowed_values.contains(&self.state.field) {
-            return false;
-        }
-        self.law.check(&self.state, event)
+        let mut candidate = self.clone();
+        crate::perform_movement(&mut candidate, event.clone()).is_ok()
     }
     pub fn diff(&self, other: &Reality) -> RealityDiff {
         RealityDiff {
@@ -352,18 +470,20 @@ impl Reality {
         let mut accepted = 0usize;
 
         for event in events {
-            if clone.would_accept(event) {
-                results.push(true);
-                let _ = crate::perform_movement(&mut clone, event.clone());
-                accepted += 1;
-            } else {
-                results.push(false);
-                return PreflightReport {
-                    results,
-                    sequence_lawful: false,
-                    final_state: None,
-                    transition_count: accepted,
-                };
+            match crate::perform_movement(&mut clone, event.clone()) {
+                Ok(_) => {
+                    results.push(true);
+                    accepted += 1;
+                }
+                Err(_) => {
+                    results.push(false);
+                    return PreflightReport {
+                        results,
+                        sequence_lawful: false,
+                        final_state: None,
+                        transition_count: accepted,
+                    };
+                }
             }
         }
 

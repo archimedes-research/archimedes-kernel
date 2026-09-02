@@ -21,50 +21,27 @@ pub use verification::{
 };
 
 /// Perform one minimal Archimedean movement.
-/// Returns Ok(ProofResult) only if all checks pass.
-/// Returns Err(MovementError) on the first failure encountered.
+///
+/// The operation is failure-atomic at the `Reality` value boundary:
+/// caller-visible state and movement memory are committed only after
+/// every required validation succeeds.
 pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResult, MovementError> {
-    // ---- 1. Reality exists ----
-    // (reality is passed by reference)
+    reality.validate()?;
 
-    // ---- 2. Identity confirmed ----
-    if reality.identity.0.is_empty() {
-        return Err(MovementError::IdentityMissingOrUnstable);
-    }
-
-    // ---- 3. Boundary confirmed ----
-    if reality.boundary.allowed_values.is_empty() {
-        return Err(MovementError::BoundaryMissing);
-    }
-
-    // ---- 4. Law confirmed ----
-    if reality.law.allowed_transitions.is_empty() {
-        return Err(MovementError::LawMissing);
-    }
-
-    // ---- 5. State confirmed ----
-    if reality.state.field.is_empty() {
+    if event.proposed_field.is_empty() {
         return Err(MovementError::StateMissing);
     }
 
-    // ---- 6. State is inside Boundary ----
     if !reality
         .boundary
         .allowed_values
-        .contains(&reality.state.field)
+        .contains(&event.proposed_field)
     {
         return Err(MovementError::StateOutsideBoundary);
     }
 
-    // ---- Event received ----
-    // event is passed by value.
-
-    // ---- Event must NOT mutate state directly ----
-    // By design, event only carries a proposed field; it cannot mutate reality.
-    let event_directly_mutated_state = false;
-
-    // ---- 7. LawCheck performed ----
     let law_check_result = reality.law.check(&reality.state, &event);
+
     let law_check = LawCheck {
         result: law_check_result,
         explanation: if law_check_result {
@@ -73,86 +50,67 @@ pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResu
             "unlawful transition".to_string()
         },
     };
-    let law_check_performed = true;
 
-    // ---- 8. Transition occurs before LawCheck? No, we do LawCheck first. ----
     if !law_check.result {
         return Err(MovementError::TransitionNotGroundedInLawCheck);
     }
 
-    // ---- 9. Transition recorded ----
+    let mut candidate = reality.clone();
+
+    let before_state = candidate.state.clone();
+
     let after_state = State {
         field: event.proposed_field.clone(),
     };
 
-    // Compute tamper-evident hashes for the movement memory.
-    let prev_hash = reality.memory.current_hash();
-    let self_hash =
-        movement::hash_transition(prev_hash, &reality.state, &after_state, law_check.result);
+    let prev_hash = candidate.memory.current_hash();
 
-    let transition = Transition {
-        before: reality.state.clone(),
+    let self_hash =
+        movement::hash_transition(prev_hash, &before_state, &after_state, law_check.result);
+
+    candidate.memory.transitions.push(Transition {
+        before: before_state,
         after: after_state.clone(),
         law_check_valid: law_check.result,
         prev_hash,
         self_hash,
-    };
+    });
 
-    reality.memory.transitions.push(transition);
-    reality.state = after_state;
+    candidate.state = after_state;
 
-    // ---- Test hook: simulate hidden mutation (only in test builds) ----
     #[cfg(test)]
-    if let Some(hook) = reality.test_hook {
-        hook(reality);
+    if let Some(hook) = candidate.test_hook {
+        hook(&mut candidate);
     }
 
-    // ---- 10. Inspection available ----
-    let inspection = Inspection {
-        initial_state: reality.initial_state.clone(),
-        memory: reality.memory.clone(),
-        current_state: reality.state.clone(),
-    };
-    let inspection_available = inspection.initial_state == reality.initial_state
-        && inspection.memory == reality.memory
-        && inspection.current_state == reality.state;
+    candidate.validate()?;
 
-    // ---- 11. Replay ----
-    let mut replayed_state = reality.initial_state.clone();
-    for t in &reality.memory.transitions {
-        if !t.law_check_valid {
-            return Err(MovementError::TransitionNotGroundedInLawCheck);
-        }
-        replayed_state = t.after.clone();
-    }
-    let replay_result = replayed_state == reality.state;
+    let inspection = candidate.inspect();
 
-    // ---- 12. Continuity ----
-    let continuity_result = replay_result;
+    let inspection_available = inspection.initial_state == candidate.initial_state
+        && inspection.memory == candidate.memory
+        && inspection.current_state == candidate.state;
 
-    // ---- 13. DriftCheck ----
-    let drift_check = detect_drift(
-        &reality.birth_boundary,
-        &reality.birth_law,
-        &reality.boundary,
-        &reality.law,
-        replay_result,
-    );
+    let replay_result = candidate.replay().passed;
+    let continuity_result = candidate.continuity().preserved;
+    let drift_check = candidate.drift_check();
 
     if drift_check.hidden_state_mutation_detected {
         return Err(MovementError::DriftCheckDetectedHiddenStateMutation);
     }
+
     if drift_check.hidden_boundary_growth_detected {
         return Err(MovementError::DriftCheckDetectedHiddenBoundaryGrowth);
     }
+
     if drift_check.hidden_law_growth_detected {
         return Err(MovementError::DriftCheckDetectedHiddenLawGrowth);
     }
+
     if drift_check.permission_drift_detected {
         return Err(MovementError::DriftCheckDetectedPermissionDrift);
     }
 
-    // ---- 14. ProofResult ----
     let proof = ProofResult {
         reality_exists: true,
         identity_confirmed: true,
@@ -160,12 +118,12 @@ pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResu
         active_law_confirmed: true,
         state_confirmed: true,
         event_received: true,
-        event_directly_mutated_state,
-        law_check_performed,
+        event_directly_mutated_state: false,
+        law_check_performed: true,
         law_check_result: law_check.result,
         transition_recorded: true,
         transition_grounded_in_law_check: true,
-        movement_memory_recorded: !reality.memory.transitions.is_empty(),
+        movement_memory_recorded: !candidate.memory.transitions.is_empty(),
         inspection_available,
         replay_result,
         continuity_result,
@@ -177,7 +135,6 @@ pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResu
         proof_status: true,
     };
 
-    // Final sanity check
     if !proof.reality_exists
         || !proof.identity_confirmed
         || !proof.active_boundary_confirmed
@@ -201,6 +158,8 @@ pub fn perform_movement(reality: &mut Reality, event: Event) -> Result<ProofResu
     {
         return Err(MovementError::ProofResultDeclaresPassWithoutEvidence);
     }
+
+    *reality = candidate;
 
     Ok(proof)
 }
@@ -331,7 +290,8 @@ mod tests {
             result.unwrap_err(),
             MovementError::DriftCheckDetectedHiddenBoundaryGrowth
         );
-        assert_eq!(reality.memory().transitions.len(), 1);
+        assert_eq!(reality.memory().transitions.len(), 0);
+        assert_eq!(reality.state.field, "before");
     }
 
     #[test]

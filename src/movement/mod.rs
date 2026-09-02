@@ -84,6 +84,20 @@ impl MovementMemory {
         true
     }
 
+    pub fn verify_semantic_continuity(&self, initial_state: &State) -> bool {
+        let Some(first) = self.transitions.first() else {
+            return true;
+        };
+
+        if &first.before != initial_state {
+            return false;
+        }
+
+        self.transitions
+            .windows(2)
+            .all(|pair| pair[0].after == pair[1].before)
+    }
+
     pub fn compose(&self, start: usize, end: usize) -> Option<MovementComposition> {
         if start > end || end >= self.transitions.len() {
             return None;
@@ -125,6 +139,17 @@ impl MovementComposition {
         }
 
         if last.self_hash != self.hash {
+            return false;
+        }
+
+        if self.start_index > 0 && memory.transitions[self.start_index - 1].after != first.before {
+            return false;
+        }
+
+        if !memory.transitions[self.start_index..=self.end_index]
+            .windows(2)
+            .all(|pair| pair[0].after == pair[1].before)
+        {
             return false;
         }
 
